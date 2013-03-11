@@ -6,20 +6,29 @@
             [cemerick.friend :as friend]
             [cemerick.friend.workflows :as workflows]
             [cemerick.friend.credentials :as creds]
-            [carica.core :refer [config]]))
+            [carica.core :refer [config]]
+            [clojure.java.jdbc :as jdbc]))
 
 
 (def user-users {"root" {:username "root"
                          :password (creds/hash-bcrypt "password")
                          :roles #{::authenticated}}})
 
-(def users {"root" {:username "root"
-                    :password (creds/hash-bcrypt "password")
-                    :roles #{:com.thelastcitadel.ideapad/authenticated}}})
+;; TODO: move url and table in to carica config
+(defn users [username]
+  (jdbc/with-connection (System/getProperty "user.db.url")
+    (jdbc/with-query-results results
+      [(str "SELECT username,password FROM "
+            (System/getProperty "user.db.table")
+            " WHERE username=?")
+       username]
+      (first (for [r results]
+               (assoc r
+                 :roles #{:com.thelastcitadel.ideapad/authenticated}))))))
 
 (defn user-lookup* [request]
   {:status 200
-   :body (pr-str (get users (:username (:params request))))
+   :body (pr-str (users (:username (:params request))))
    :headers {"Content-Type" "application/edn"}})
 
 (def user-lookup (-> user-lookup*
@@ -42,3 +51,4 @@
                   {:credential-fn (partial creds/bcrypt-credential-fn user-users)
                    :workflows [(workflows/interactive-form)]})
                  site))
+

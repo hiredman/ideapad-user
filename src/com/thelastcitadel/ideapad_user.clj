@@ -1,26 +1,23 @@
 (ns com.thelastcitadel.ideapad-user
   (:require [compojure.handler :refer [site]]
-            [compojure.core :refer [defroutes GET ANY]]
+            [compojure.core :refer [defroutes GET ANY POST]]
             [compojure.route :refer [not-found]]
-            [cheshire.core :as json]
             [cemerick.friend :as friend]
             [cemerick.friend.workflows :as workflows]
             [cemerick.friend.credentials :as creds]
-            [carica.core :refer [config]]
-            [clojure.java.jdbc :as jdbc]))
+            [clojure.java.jdbc :as jdbc]
+            [ring.util.response :refer [redirect]])
+  (:import (java.util UUID)))
 
 
 (def user-users {"root" {:username "root"
                          :password (creds/hash-bcrypt "password")
                          :roles #{::authenticated}}})
 
-;; TODO: move url and table in to carica config
-(defn users [username]
-  (jdbc/with-connection (System/getProperty "user.db.url")
+(defn users [username [url table]]
+  (jdbc/with-connection url
     (jdbc/with-query-results results
-      [(str "SELECT username,password FROM "
-            (System/getProperty "user.db.table")
-            " WHERE username=?")
+      [(str "SELECT username,password FROM " table " WHERE username=?")
        username]
       (first (for [r results]
                (assoc r
@@ -28,20 +25,35 @@
 
 (defn user-lookup* [request]
   {:status 200
-   :body (pr-str (users (:username (:params request))))
+   :body (pr-str (users (:username (:params request)) (::url request)))
    :headers {"Content-Type" "application/edn"}})
 
 (def user-lookup (-> user-lookup*
                      (friend/wrap-authorize #{::authenticated})))
 
+(def sites (atom {}))
+
 (defroutes app
-  (ANY "/" request
+  (GET "/" request
        {:status 200
         :body ""})
+  (POST "/" request
+        (if-let [url (:jdbc-url (:params request))]
+          (let [table (:table (:params request))
+                id (str (UUID/randomUUID))]
+            (swap! sites assoc id [url table])
+            (redirect (str "/site/" id)))
+          {:status 400
+           :body "whoops"}))
+  (GET "/site/:id" request
+       {:status 200
+        :body "configured"})
+  (GET "/site/:id/:username" request
+       (user-lookup (assoc request
+                      ::url (get @sites (get (:params request) :id)))))
   (ANY "/login" request
        {:status 200
         :body ""})
-  (GET "/user/:username" request  user-lookup)
   (friend/logout
    (ANY "/logout" request (ring.util.response/redirect "/")))
   (not-found "wuh oh"))
@@ -51,4 +63,3 @@
                   {:credential-fn (partial creds/bcrypt-credential-fn user-users)
                    :workflows [(workflows/interactive-form)]})
                  site))
-
